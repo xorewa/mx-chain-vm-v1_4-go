@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/multiversx/mx-chain-core-go/core"
 	logger "github.com/multiversx/mx-chain-logger-go"
@@ -336,27 +337,47 @@ func TestExecution_MultipleVMs_CleanInstanceWhileOthersAreRunning(t *testing.T) 
 	input.GasProvided = 1000000
 	input.Function = get
 
-	interHostsChan := make(chan string)
-	host1Chan := make(chan string)
+	const waitTimeout = 5 * time.Second
+
+	host1Running := make(chan struct{}, 1)
+	host1Done := make(chan struct{})
+	host2WasmerStarted := make(chan struct{}, 1)
+
+	signal := func(ch chan struct{}) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+
+	waitForSignal := func(ch <-chan struct{}, errMessage string) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.After(waitTimeout):
+			t.Error(errMessage)
+			return false
+		}
+	}
 
 	host1, _ := test.DefaultTestVMForCall(t, code, nil)
 	defer func() {
 		host1.Reset()
 	}()
 	_, _, _, _, runtimeContext1, _ := host1.GetContexts()
-	runtimeContextMock := contextmock.NewRuntimeContextWrapper(&runtimeContext1)
-	runtimeContextMock.FunctionFunc = func() string {
-		interHostsChan <- "waitForHost2"
-		return runtimeContextMock.GetWrappedRuntimeContext().Function()
+	runtimeContextMock1 := contextmock.NewRuntimeContextWrapper(&runtimeContext1)
+	runtimeContextMock1.FunctionFunc = func() string {
+		signal(host1Running)
+		_ = waitForSignal(host2WasmerStarted, "timed out waiting for host2 to start Wasmer instance")
+		return runtimeContextMock1.GetWrappedRuntimeContext().Function()
 	}
-	host1.SetRuntimeContext(runtimeContextMock)
+	host1.SetRuntimeContext(runtimeContextMock1)
 
 	var vmOutput1 *vmcommon.VMOutput
 	var err1 error
 	go func() {
 		vmOutput1, err1 = host1.RunSmartContractCall(input)
-		interHostsChan <- "finish"
-		host1Chan <- "finish"
+		close(host1Done)
 	}()
 
 	host2, _ := test.DefaultTestVMForCall(t, code, nil)
@@ -364,19 +385,26 @@ func TestExecution_MultipleVMs_CleanInstanceWhileOthersAreRunning(t *testing.T) 
 		host2.Reset()
 	}()
 	_, _, _, _, runtimeContext2, _ := host2.GetContexts()
-	runtimeContextMock = contextmock.NewRuntimeContextWrapper(&runtimeContext2)
-	runtimeContextMock.FunctionFunc = func() string {
-		// wait to make sure host1 is running also
-		<-interHostsChan
-		// wait for host1 to finish
-		<-interHostsChan
-		return runtimeContextMock.GetWrappedRuntimeContext().Function()
+	runtimeContextMock2 := contextmock.NewRuntimeContextWrapper(&runtimeContext2)
+	runtimeContextMock2.StartWasmerInstanceFunc = func(contract []byte, gasLimit uint64, newCode bool) error {
+		if !waitForSignal(host1Running, "timed out waiting for host1 to enter execution") {
+			signal(host2WasmerStarted)
+			return errors.New("host1 did not enter execution")
+		}
+
+		err := runtimeContextMock2.GetWrappedRuntimeContext().StartWasmerInstance(contract, gasLimit, newCode)
+		signal(host2WasmerStarted)
+		return err
 	}
-	host2.SetRuntimeContext(runtimeContextMock)
+	runtimeContextMock2.FunctionFunc = func() string {
+		_ = waitForSignal(host1Done, "timed out waiting for host1 to finish")
+		return runtimeContextMock2.GetWrappedRuntimeContext().Function()
+	}
+	host2.SetRuntimeContext(runtimeContextMock2)
 
 	vmOutput2, err2 := host2.RunSmartContractCall(input)
 
-	<-host1Chan
+	_ = waitForSignal(host1Done, "timed out waiting for host1 goroutine")
 
 	verify1 := test.NewVMOutputVerifier(t, vmOutput1, err1)
 	verify1.Ok()

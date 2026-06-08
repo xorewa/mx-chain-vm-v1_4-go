@@ -4,6 +4,7 @@ package wasmer
 import "C"
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 
 	"github.com/multiversx/mx-chain-core-go/core/check"
@@ -14,6 +15,11 @@ import (
 const OpcodeCount = 448
 
 var logWasmer = logger.GetOrCreate("vm/wasmer")
+
+// legacyWasmerLifecycleMutex serializes native Wasmer operations that touch
+// process-global state in the legacy v1.4 engine, such as the import-object
+// cache and instance construction/destruction.
+var legacyWasmerLifecycleMutex sync.Mutex
 
 // InstanceError represents any kind of errors related to a WebAssembly instance. It
 // is returned by `Instance` functions only.
@@ -157,6 +163,9 @@ func newWrappedError(target error) error {
 func SetImports(imports *Imports) error {
 	wasmImportsCPointer, numberOfImports := generateWasmerImports(imports)
 
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
+
 	var result = cWasmerCacheImportObjectFromImports(
 		wasmImportsCPointer,
 		cInt(numberOfImports),
@@ -170,6 +179,9 @@ func SetImports(imports *Imports) error {
 
 // SetOpcodeCosts sets the opcode costs in Wasmer
 func SetOpcodeCosts(opcodeCosts *[OpcodeCount]uint32) {
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
+
 	cWasmerSetOpcodeCosts(opcodeCosts)
 }
 
@@ -185,6 +197,9 @@ func NewInstanceWithOptions(
 		var emptyInstance = &Instance{instance: nil, Exports: nil, Memory: nil}
 		return emptyInstance, newWrappedError(ErrInvalidBytecode)
 	}
+
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
 
 	cOptions := unsafe.Pointer(&options)
 	var compileResult = cWasmerInstantiateWithOptions(
@@ -259,6 +274,9 @@ func NewInstanceFromCompiledCodeWithOptions(
 		return emptyInstance, newWrappedError(ErrInvalidBytecode)
 	}
 
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
+
 	cOptions := unsafe.Pointer(&options)
 	var instantiateResult = cWasmerInstanceFromCache(
 		&cInstance,
@@ -300,6 +318,9 @@ func (instance *Instance) Clean() bool {
 		logWasmer.Trace("clean: already cleaned instance", "id", instance.ID())
 		return false
 	}
+
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
 
 	if instance.instance != nil {
 		cWasmerInstanceDestroy(instance.instance)
@@ -351,6 +372,9 @@ func (instance *Instance) GetBreakpointValue() uint64 {
 func (instance *Instance) Cache() ([]byte, error) {
 	var cacheBytes *cUchar
 	var cacheLen cUint32T
+
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
 
 	var cacheResult = cWasmerInstanceCache(
 		instance.instance,
@@ -421,6 +445,9 @@ func (instance *Instance) Reset() bool {
 		logWasmer.Trace("reset: already cleaned instance", "id", instance.ID())
 		return false
 	}
+
+	legacyWasmerLifecycleMutex.Lock()
+	defer legacyWasmerLifecycleMutex.Unlock()
 
 	result := cWasmerInstanceReset(instance.instance)
 	logWasmer.Trace("reset: warm instance", "id", instance.ID())
