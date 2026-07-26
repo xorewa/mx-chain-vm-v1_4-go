@@ -2,11 +2,9 @@ name: Code-coverage
 
 on:
   push:
-    branches:
-      - master
+    branches: [ NewArc ]
   pull_request:
-    branches: [ master, rc/*, feat/* ]
-  workflow_dispatch:
+    branches: [ NewArc ]
 
 jobs:
   build:
@@ -26,17 +24,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Get dependencies
-        run: |
-          go get -v -t -d ./...
-          if [ -f Gopkg.toml ]; then
-              curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
-              dep ensure
-          fi
+        run: go mod download
       - name: Run unit tests
         run: |
           TESTS_TO_RUN=$(go list ./... | grep -v /integrationTests/ | grep -v /fuzz/ | grep -v /mandos-go/json/integrationTests | grep -v /mandos-go/expression/integrationTests)
           go test -short -cover -coverprofile=coverage.txt -covermode=atomic -v ${TESTS_TO_RUN}
-
-      - name: Upload coverage
-        run: bash <(curl -s https://codecov.io/bash) -f coverage.txt -y codecov.yml
 

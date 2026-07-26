@@ -2,10 +2,9 @@ name: Build and run tests
 
 on:
   pull_request:
-    branches: [ master, rc/*, feat/* ]
-    types: [ opened, ready_for_review ]
+    branches: [ NewArc ]
   push:
-  workflow_dispatch:
+    branches: [ NewArc ]
 
 jobs:
   test:
