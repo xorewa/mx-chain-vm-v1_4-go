@@ -1,0 +1,28 @@
+version: "2"
+
+# These diagnostics predate the Go 1.26 retrofit.  They are intentionally
+# constrained to the exact legacy sites below so staticcheck remains enabled
+# everywhere else.  The crypto API migration requires a separate, reviewed
+# VM-compatibility change: changing it as part of a compiler upgrade could
+# alter smart-contract execution semantics.
+linters:
+  exclusions:
+    rules:
+      - path: ^test/contracts/big-floats-2/generateRandomData/generateData\.go$
+        text: SA1019
+      - path: ^testcommon/testInitializer_inputs\.go$
+        text: QF1008
+      - path: ^vmhost/contexts/runtime_test\.go$
+        text: SA1019
+      - path: ^vmhost/cryptoapi/cryptoei\.go$
+        text: SA1019
+      - path: ^vmhost/hosttest/contracts_from_src_test\.go$
+        text: ST1019
+      - path: ^vmhost/hosttest/execution_benchmark_test\.go$
+        text: QF1001
+      - path: ^vmhost/hosttest/wasmer_test\.go$
+        text: SA1019
+      - path: ^wasmer/error\.go$
+        text: ST1017
+      - path: ^wasmer/error\.go$
+        text: ST1005
